@@ -1,7 +1,7 @@
 import asyncio
-import itertools
+import os
 from collections import defaultdict
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -16,239 +16,177 @@ from .interfaces import BaseMarketDataSource
 
 
 class SimpleMarketDataSource(BaseMarketDataSource):
-    """Generates synthetic candle data for each symbol or fetches via ccxt.pro.
-
-    If `exchange_id` was provided at construction time and `ccxt.pro` is
-    available, this class will attempt to fetch OHLCV data from the
-    specified exchange. If any error occurs (missing library, unknown
-    exchange, network error), it falls back to the built-in synthetic
-    generator so the runtime remains functional in tests and offline.
-    """
+    """Market data source using ccxt for OKX exchange."""
 
     def __init__(self, exchange_id: Optional[str] = None) -> None:
-        if not exchange_id:
-            self._exchange_id = "okx"
-        else:
-            self._exchange_id = exchange_id
+        self._exchange_id = exchange_id or "okx"
 
-    def _normalize_symbol(self, symbol: str) -> str:
-        """Normalize symbol format for specific exchanges.
+    def _get_proxy_config(self) -> Dict[str, Any]:
+        """获取代理配置"""
+        proxy_url = (
+            os.getenv("HTTPS_PROXY")
+            or os.getenv("HTTP_PROXY")
+            or os.getenv("https_proxy")
+            or os.getenv("http_proxy")
+            or "http://127.0.0.1:7890"
+        )
+        
+        logger.info(f"🔧 [{self._exchange_id}] Using proxy: {proxy_url}")
+        
+        return {
+            "aiohttp_proxy": proxy_url,
+            "proxies": {"http": proxy_url, "https": proxy_url},
+            "timeout": 60000,
+        }
 
-        For Hyperliquid: converts BTC-USDC to BTC/USDC:USDC (swap format)
-        For other exchanges: converts BTC-USDC to BTC/USDC:USDC
-
+    def _create_exchange(self, market_type: str = "swap") -> Any:
+        """创建 exchange 实例
+        
         Args:
-            symbol: Symbol in format 'BTC-USDC', 'ETH-USDT', etc.
-
-        Returns:
-            Normalized CCXT symbol for the specific exchange
+            market_type: 'spot', 'swap', 'future'
         """
-        # Replace dash with slash
+        exchange_cls = get_exchange_cls(self._exchange_id)
+        
+        config = {
+            "enableRateLimit": True,
+            "options": {
+                "defaultType": market_type,  # 关键：指定市场类型
+            },
+            **self._get_proxy_config(),
+        }
+        
+        return exchange_cls(config)
+
+    def _get_ccxt_symbol(self, symbol: str, market_type: str = "swap") -> str:
+        """转换为 ccxt 格式的交易对
+        
+        Args:
+            symbol: 输入格式 'BTC/USDT' 或 'BTC-USDT'
+            market_type: 'spot' 或 'swap'
+            
+        Returns:
+            ccxt 格式: 'BTC/USDT' (spot) 或 'BTC/USDT:USDT' (swap)
+        """
+        # 统一格式
         base_symbol = symbol.replace("-", "/")
-
-        # For most exchanges (especially those requiring settlement currency)
-        if ":" not in base_symbol:
-            parts = base_symbol.split("/")
-            if len(parts) == 2:
-                # Add settlement currency (e.g., BTC/USDC -> BTC/USDC:USDC)
-                base_symbol = f"{parts[0]}/{parts[1]}:{parts[1]}"
-
-        return base_symbol
+        
+        if market_type == "spot":
+            return base_symbol  # BTC/USDT
+        else:
+            # 永续合约格式
+            if ":" not in base_symbol:
+                parts = base_symbol.split("/")
+                if len(parts) == 2:
+                    return f"{parts[0]}/{parts[1]}:{parts[1]}"  # BTC/USDT:USDT
+            return base_symbol
 
     async def get_recent_candles(
         self, symbols: List[str], interval: str, lookback: int
     ) -> List[Candle]:
-        async def _fetch_and_process(symbol: str) -> List[Candle]:
-            # instantiate exchange class by name (e.g., ccxtpro.kraken)
-            exchange_cls = get_exchange_cls(self._exchange_id)
-            exchange = exchange_cls({"newUpdates": False})
+        """获取 K 线数据"""
+        
+        # OKX 不支持 1s
+        if interval == "1s":
+            logger.warning("1s fallback to 1m (OKX limit)")
+            interval = "1m"
 
-            symbol_candles: List[Candle] = []
-            normalized_symbol = self._normalize_symbol(symbol)
-            try:
+        all_candles: List[Candle] = []
+        
+        # 使用永续合约市场
+        exchange = self._create_exchange(market_type="swap")
+        
+        try:
+            # 只加载 swap 市场，避免加载 OPTION 等其他市场
+            logger.debug(f"📡 Loading swap markets...")
+            await exchange.load_markets()
+            logger.debug(f"📡 Markets loaded: {len(exchange.markets)} pairs")
+            
+            for symbol in symbols:
+                ccxt_symbol = self._get_ccxt_symbol(symbol, "swap")
+                
                 try:
-                    # ccxt.pro uses async fetch_ohlcv with normalized symbol
+                    # 检查交易对是否存在
+                    if ccxt_symbol not in exchange.markets:
+                        logger.warning(f"⚠️ Symbol {ccxt_symbol} not found in markets")
+                        continue
+                    
+                    # 获取 OHLCV
                     raw = await exchange.fetch_ohlcv(
-                        normalized_symbol,
+                        ccxt_symbol,
                         timeframe=interval,
-                        since=None,
                         limit=lookback,
                     )
-                finally:
-                    try:
-                        await exchange.close()
-                    except Exception:
-                        pass
-
-                # raw is list of [ts, open, high, low, close, volume]
-                for row in raw:
-                    ts, open_v, high_v, low_v, close_v, vol = row
-                    symbol_candles.append(
-                        Candle(
-                            ts=int(ts),
-                            instrument=InstrumentRef(
-                                symbol=symbol,
-                                exchange_id=self._exchange_id,
-                                # quote_ccy="USD",
-                            ),
-                            open=float(open_v),
-                            high=float(high_v),
-                            low=float(low_v),
-                            close=float(close_v),
-                            volume=float(vol),
-                            interval=interval,
+                    
+                    for row in raw:
+                        ts, o, h, l, c, v = row
+                        all_candles.append(
+                            Candle(
+                                ts=int(ts),
+                                instrument=InstrumentRef(
+                                    symbol=symbol,
+                                    exchange_id=self._exchange_id,
+                                ),
+                                open=float(o),
+                                high=float(h),
+                                low=float(l),
+                                close=float(c),
+                                volume=float(v),
+                                interval=interval,
+                            )
                         )
-                    )
-                return symbol_candles
-            except Exception as exc:
-                logger.warning(
-                    "Failed to fetch candles for {} (normalized: {}) from {}, data interval is {}, return empty candles. Error: {}",
-                    symbol,
-                    normalized_symbol,
-                    self._exchange_id,
-                    interval,
-                    exc,
-                )
-                return []
-
-        # Run fetch for each symbol concurrently
-        tasks = [_fetch_and_process(symbol) for symbol in symbols]
-        results = await asyncio.gather(*tasks)
-
-        # Flatten the list of lists results into a single list of candles
-        candles: List[Candle] = list(itertools.chain.from_iterable(results))
-
-        logger.debug(
-            f"Fetch {len(candles)} candles symbols: {symbols}, interval: {interval}, lookback: {lookback}"
-        )
-        return candles
-
-    async def get_market_snapshot(self, symbols: List[str]) -> MarketSnapShotType:
-        """Fetch latest prices for the given symbols using exchange endpoints.
-
-        The method tries to use the exchange's `fetch_ticker` (and optionally
-        `fetch_open_interest` / `fetch_funding_rate` when available) to build
-        a mapping symbol -> last price. On any failure for a symbol, the
-        symbol will be omitted from the snapshot.
-        Example:
-        ```
-        "BTC/USDT": {
-            "price": {
-                "symbol": "BTC/USDT:USDT",
-                "timestamp": 1762930517943,
-                "datetime": "2025-11-12T06:55:17.943Z",
-                "high": 105464.2,
-                "low": 102400.0,
-                "vwap": 103748.56,
-                "open": 105107.1,
-                "close": 103325.0,
-                "last": 103325.0,
-                "change": -1782.1,
-                "percentage": -1.696,
-                "average": 104216.0,
-                "baseVolume": 105445.427,
-                "quoteVolume": 10939811519.57,
-                "info": {
-                    "symbol": "BTCUSDT",
-                    "priceChange": "-1782.10",
-                    "priceChangePercent": "-1.696",
-                    "weightedAvgPrice": "103748.56",
-                    "lastPrice": "103325.00",
-                    "lastQty": "0.002",
-                    "openPrice": "105107.10",
-                    "highPrice": "105464.20",
-                    "lowPrice": "102400.00",
-                    "volume": "105445.427",
-                    "quoteVolume": "10939811519.57",
-                    "openTime": 1762844100000,
-                    "closeTime": 1762930517943,
-                    "firstId": 6852533393,
-                    "lastId": 6856484055,
-                    "count": 3942419
-                }
-            },
-            "open_interest": {
-                "symbol": "BTC/USDT:USDT",
-                "baseVolume": 85179.147,
-                "openInterestAmount": 85179.147,
-                "timestamp": 1762930517944,
-                "datetime": "2025-11-12T06:55:17.944Z",
-                "info": {
-                    "symbol": "BTCUSDT",
-                    "openInterest": "85179.147",
-                    "time": 1762930517944
-                }
-            },
-            "funding_rate": {
-                "info": {
-                    "symbol": "BTCUSDT",
-                    "markPrice": "103325.10000000",
-                    "indexPrice": "103382.54282609",
-                    "estimatedSettlePrice": "103477.58650543",
-                    "lastFundingRate": "0.00000967",
-                    "interestRate": "0.00010000",
-                    "nextFundingTime": 1762934400000,
-                    "time": 1762930523000
-                },
-                "symbol": "BTC/USDT:USDT",
-                "markPrice": 103325.1,
-                "indexPrice": 103382.54282609,
-                "interestRate": 0.0001,
-                "estimatedSettlePrice": 103477.58650543,
-                "timestamp": 1762930523000,
-                "datetime": "2025-11-12T06:55:23.000Z",
-                "fundingRate": 9.67e-06,
-                "fundingTimestamp": 1762934400000,
-                "fundingDatetime": "2025-11-12T08:00:00.000Z"
-            }
-        }
-        ```
-        """
-        snapshot = defaultdict(dict)
-
-        exchange_cls = get_exchange_cls(self._exchange_id)
-        exchange = exchange_cls({"newUpdates": False})
-        try:
-            for symbol in symbols:
-                sym = normalize_symbol(symbol)
-                try:
-                    ticker = await exchange.fetch_ticker(sym)
-                    snapshot[symbol]["price"] = ticker
-
-                    # best-effort: warm other endpoints (open interest / funding)
-                    try:
-                        oi = await exchange.fetch_open_interest(sym)
-                        snapshot[symbol]["open_interest"] = oi
-                    except Exception:
-                        logger.exception(
-                            "Failed to fetch open interest for {} at {}",
-                            symbol,
-                            self._exchange_id,
-                        )
-
-                    try:
-                        fr = await exchange.fetch_funding_rate(sym)
-                        snapshot[symbol]["funding_rate"] = fr
-                    except Exception:
-                        logger.exception(
-                            "Failed to fetch funding rate for {} at {}",
-                            symbol,
-                            self._exchange_id,
-                        )
-                    logger.debug(f"Fetch market snapshot for {sym} data: {snapshot}")
-                except Exception:
-                    logger.exception(
-                        "Failed to fetch market snapshot for {} at {}",
-                        symbol,
-                        self._exchange_id,
-                    )
+                    
+                    logger.debug(f"✅ [{interval}] {symbol}: {len(raw)} candles")
+                    
+                except Exception as e:
+                    logger.warning(f"❌ [{interval}] {symbol}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Failed to load markets: {e}")
         finally:
             try:
                 await exchange.close()
-            except Exception:
-                logger.exception(
-                    "Failed to close exchange connection for {}",
-                    self._exchange_id,
-                )
+            except:
+                pass
 
+        logger.info(f"📊 Candles total: {len(all_candles)} for {symbols} [{interval}]")
+        return all_candles
+
+    async def get_market_snapshot(self, symbols: List[str]) -> MarketSnapShotType:
+        """获取市场快照（当前价格）"""
+        snapshot: Dict[str, Dict[str, Any]] = defaultdict(dict)
+        success_count = 0
+        
+        exchange = self._create_exchange(market_type="swap")
+        
+        try:
+            await exchange.load_markets()
+            
+            for symbol in symbols:
+                ccxt_symbol = self._get_ccxt_symbol(symbol, "swap")
+                
+                try:
+                    ticker = await exchange.fetch_ticker(ccxt_symbol)
+                    snapshot[symbol]["price"] = ticker
+                    success_count += 1
+                    logger.debug(f"✅ Ticker {symbol}: last={ticker.get('last')}")
+                    
+                    # 尝试获取资金费率
+                    try:
+                        fr = await exchange.fetch_funding_rate(ccxt_symbol)
+                        snapshot[symbol]["funding_rate"] = fr
+                    except:
+                        pass
+                        
+                except Exception as e:
+                    logger.warning(f"❌ Ticker {symbol}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Markets load failed: {e}")
+        finally:
+            try:
+                await exchange.close()
+            except:
+                pass
+
+        logger.info(f"📈 Snapshot OK: {success_count}/{len(symbols)}")
         return dict(snapshot)
