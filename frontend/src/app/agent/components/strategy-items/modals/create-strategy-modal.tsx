@@ -21,6 +21,7 @@ import CloseButton from "@/components/valuecell/button/close-button";
 import ScrollContainer from "@/components/valuecell/scroll/scroll-container";
 import { TRADING_SYMBOLS } from "@/constants/agent";
 import { useAppForm } from "@/hooks/use-form";
+import { tracker } from "@/lib/tracker";
 import type { Strategy } from "@/types/strategy";
 import { AIModelForm } from "../forms/ai-model-form";
 import { EXCHANGE_OPTIONS, ExchangeForm } from "../forms/exchange-form";
@@ -99,6 +100,10 @@ const step3Schema = z.object({
     .max(5, "Leverage must be at most 5"),
   symbols: z.array(z.string()).min(1, "At least one symbol is required"),
   template_id: z.string().min(1, "Template selection is required"),
+  decide_interval: z
+    .number()
+    .min(10, "Interval must be at least 10 seconds")
+    .max(3600, "Interval must be at most 3600 seconds"),
 });
 
 const STEPS = [
@@ -262,6 +267,7 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({ children }) => {
       strategy_name: "",
       initial_capital: 1000,
       max_leverage: 2,
+      decide_interval: 60,
       symbols: TRADING_SYMBOLS,
       template_id: prompts.length > 0 ? prompts[0].id : "",
     },
@@ -276,6 +282,7 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({ children }) => {
       };
 
       await createStrategy(payload);
+      tracker.send("use", { agent_name: "StrategyAgent" });
       resetAll();
     },
   });
