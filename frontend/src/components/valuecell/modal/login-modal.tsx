@@ -14,6 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { tracker } from "@/lib/tracker";
 import { useSystemStore } from "@/store/system-store";
 import CloseButton from "../button/close-button";
 import SvgIcon from "../icon/svg-icon";
@@ -21,11 +22,11 @@ import ScrollContainer from "../scroll/scroll-container";
 
 type PendingAction = "gmail" | "apple";
 
-export interface AppLoginModalProps {
+export interface LoginModalProps {
   children?: React.ReactNode;
 }
 
-export default function AppLoginModal({ children }: AppLoginModalProps) {
+export default function LoginModal({ children }: LoginModalProps) {
   const [open, setOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(
     null,
@@ -87,6 +88,8 @@ export default function AppLoginModal({ children }: AppLoginModalProps) {
                 ...userInfo,
               });
             }
+
+            tracker.send("login", { user_id: userInfo.id });
 
             setOpen(false);
           }

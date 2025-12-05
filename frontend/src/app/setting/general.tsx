@@ -10,9 +10,10 @@ import {
   FieldTitle,
 } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import AppLoginModal from "@/components/valuecell/app/app-login-modal";
+import LoginModal from "@/components/valuecell/modal/login-modal";
 import { useTauriInfo } from "@/hooks/use-tauri-info";
 import { useUpdateToast } from "@/hooks/use-update-toast";
+import { withTrack } from "@/lib/tracker";
 import type { StockColorMode } from "@/store/settings-store";
 import { useSettingsActions, useStockColorMode } from "@/store/settings-store";
 import { useIsLoggedIn, useSystemInfo } from "@/store/system-store";
@@ -22,7 +23,7 @@ export default function GeneralPage() {
   const { setStockColorMode } = useSettingsActions();
   const { checkAndUpdate } = useUpdateToast();
   const { isTauriApp, appVersion } = useTauriInfo();
-  const { email } = useSystemInfo();
+  const { email, id } = useSystemInfo();
   const isLoggedIn = useIsLoggedIn();
 
   const { mutate: signOut } = useSignOut();
@@ -49,13 +50,17 @@ export default function GeneralPage() {
               </FieldDescription>
             </FieldContent>
             {isLoggedIn ? (
-              <Button variant="outline" onClick={() => signOut()}>
+              <Button
+                variant="outline"
+                onClick={() => signOut()}
+                {...withTrack("logout", { user_id: id })}
+              >
                 Sign Out
               </Button>
             ) : (
-              <AppLoginModal>
+              <LoginModal>
                 <Button>Sign In</Button>
-              </AppLoginModal>
+              </LoginModal>
             )}
           </Field>
         )}

@@ -1,6 +1,8 @@
 import { MultiSelect } from "@valuecell/multi-select";
 import { Eye, Plus } from "lucide-react";
 import { useCreateStrategyPrompt } from "@/api/strategy";
+import NewPromptModal from "@/app/agent/components/strategy-items/modals/new-prompt-modal";
+import ViewStrategyModal from "@/app/agent/components/strategy-items/modals/view-strategy-modal";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -18,8 +20,6 @@ import {
 import { TRADING_SYMBOLS } from "@/constants/agent";
 import { withForm } from "@/hooks/use-form";
 import type { Strategy, StrategyPrompt } from "@/types/strategy";
-import NewPromptModal from "../modals/new-prompt-modal";
-import ViewStrategyModal from "../modals/view-strategy-modal";
 
 export const TradingStrategyForm = withForm({
   defaultValues: {
@@ -27,6 +27,7 @@ export const TradingStrategyForm = withForm({
     strategy_name: "",
     initial_capital: 1000,
     max_leverage: 2,
+    decide_interval: 60,
     symbols: TRADING_SYMBOLS,
     template_id: "",
   },
@@ -93,6 +94,15 @@ export const TradingStrategyForm = withForm({
             )}
           </form.AppField>
         </FieldGroup>
+
+        <form.AppField name="decide_interval">
+          {(field) => (
+            <field.NumberField
+              label="Decision Interval (seconds)"
+              placeholder="e.g. 300"
+            />
+          )}
+        </form.AppField>
 
         <form.Subscribe selector={(state) => state.values.strategy_type}>
           {(strategyType) => {
