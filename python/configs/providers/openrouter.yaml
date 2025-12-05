@@ -4,7 +4,7 @@ enabled: true
 connection:
   base_url: https://openrouter.ai/api/v1
   api_key_env: OPENROUTER_API_KEY
-default_model: x-ai/grok-4.1-fast
+default_model: tngtech/deepseek-r1t2-chimera:free
 defaults:
   temperature: 0.5
 extra_headers:
@@ -25,6 +25,14 @@ models:
   name: Gemini 3 Pro Preview
 - id: x-ai/grok-4.1-fast
   name: Grok 4.1 Fast(free)
+- id: tngtech/deepseek-r1t2-chimera:free
+  name: deepseek-r1t2
+- id: qwen/qwen3-coder:free
+  name: Qwen3 Coder
+- id: google/gemini-2.0-flash-exp:free
+  name: Gemini 2.0 Flash Experimental (free)
+- id: meta-llama/llama-3.3-70b-instruct:free
+  name: 'Meta: Llama 3.3 70B Instruct (free)'
 embedding:
   default_model: qwen/qwen3-embedding-4b
   defaults:
