@@ -16,10 +16,21 @@ from .interfaces import BaseMarketDataSource
 
 
 class SimpleMarketDataSource(BaseMarketDataSource):
-    """Market data source using ccxt for OKX exchange."""
+    """Market data source using ccxt for exchanges with multi-timeframe support."""
+
+    # 默认多周期配置
+    DEFAULT_TIMEFRAMES = {
+        "1m": 120,   # 120 根 = 2 小时，用于入场时机
+        "15m": 96,   # 96 根 = 24 小时，用于短期趋势
+        "1h": 168,   # 168 根 = 7 天，用于中期趋势
+        "4h": 180,   # 180 根 = 30 天，用于主趋势
+        "1d": 90,    # 90 根 = 90 天，用于长期方向
+    }
 
     def __init__(self, exchange_id: Optional[str] = None) -> None:
         self._exchange_id = exchange_id or "okx"
+        self._markets_cache: Optional[Dict] = None
+        self._cache_exchange: Optional[Any] = None
 
     def _get_proxy_config(self) -> Dict[str, Any]:
         """获取代理配置"""
@@ -30,8 +41,6 @@ class SimpleMarketDataSource(BaseMarketDataSource):
             or os.getenv("http_proxy")
             or "http://127.0.0.1:7890"
         )
-        
-        logger.info(f"🔧 [{self._exchange_id}] Using proxy: {proxy_url}")
         
         return {
             "aiohttp_proxy": proxy_url,
@@ -50,7 +59,7 @@ class SimpleMarketDataSource(BaseMarketDataSource):
         config = {
             "enableRateLimit": True,
             "options": {
-                "defaultType": market_type,  # 关键：指定市场类型
+                "defaultType": market_type,
             },
             **self._get_proxy_config(),
         }
@@ -67,37 +76,31 @@ class SimpleMarketDataSource(BaseMarketDataSource):
         Returns:
             ccxt 格式: 'BTC/USDT' (spot) 或 'BTC/USDT:USDT' (swap)
         """
-        # 统一格式
         base_symbol = symbol.replace("-", "/")
         
         if market_type == "spot":
-            return base_symbol  # BTC/USDT
+            return base_symbol
         else:
-            # 永续合约格式
             if ":" not in base_symbol:
                 parts = base_symbol.split("/")
                 if len(parts) == 2:
-                    return f"{parts[0]}/{parts[1]}:{parts[1]}"  # BTC/USDT:USDT
+                    return f"{parts[0]}/{parts[1]}:{parts[1]}"
             return base_symbol
 
     async def get_recent_candles(
         self, symbols: List[str], interval: str, lookback: int
     ) -> List[Candle]:
-        """获取 K 线数据"""
+        """获取单一周期 K 线数据（保持向后兼容）"""
         
-        # OKX 不支持 1s
         if interval == "1s":
             logger.warning("1s fallback to 1m (OKX limit)")
             interval = "1m"
 
         all_candles: List[Candle] = []
-        
-        # 使用永续合约市场
         exchange = self._create_exchange(market_type="swap")
         
         try:
-            # 只加载 swap 市场，避免加载 OPTION 等其他市场
-            logger.debug(f"📡 Loading swap markets...")
+            logger.debug(f"📡 Loading markets for {interval}...")
             await exchange.load_markets()
             logger.debug(f"📡 Markets loaded: {len(exchange.markets)} pairs")
             
@@ -105,12 +108,10 @@ class SimpleMarketDataSource(BaseMarketDataSource):
                 ccxt_symbol = self._get_ccxt_symbol(symbol, "swap")
                 
                 try:
-                    # 检查交易对是否存在
                     if ccxt_symbol not in exchange.markets:
-                        logger.warning(f"⚠️ Symbol {ccxt_symbol} not found in markets")
+                        logger.warning(f"⚠️ Symbol {ccxt_symbol} not found")
                         continue
                     
-                    # 获取 OHLCV
                     raw = await exchange.fetch_ohlcv(
                         ccxt_symbol,
                         timeframe=interval,
@@ -151,8 +152,101 @@ class SimpleMarketDataSource(BaseMarketDataSource):
         logger.info(f"📊 Candles total: {len(all_candles)} for {symbols} [{interval}]")
         return all_candles
 
+    async def get_multi_timeframe_candles(
+        self,
+        symbols: List[str],
+        timeframes: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, List[Candle]]:
+        """获取多周期 K 线数据
+        
+        Args:
+            symbols: 交易对列表 ['BTC/USDT', 'ETH/USDT']
+            timeframes: {周期: 数量} 字典，如 {"1m": 60, "1h": 168, "4h": 180, "1d": 90}
+                       如果为 None，使用默认配置
+            
+        Returns:
+            {周期: [Candle]} 字典
+            
+        Example:
+            >>> result = await source.get_multi_timeframe_candles(
+            ...     symbols=["BTC/USDT", "ETH/USDT"],
+            ...     timeframes={"1h": 168, "4h": 180, "1d": 90}
+            ... )
+            >>> print(result.keys())  # dict_keys(['1h', '4h', '1d'])
+        """
+        if timeframes is None:
+            timeframes = self.DEFAULT_TIMEFRAMES
+            
+        result: Dict[str, List[Candle]] = {}
+        exchange = self._create_exchange(market_type="swap")
+        
+        try:
+            logger.info(f"📡 Loading markets for multi-timeframe analysis...")
+            await exchange.load_markets()
+            logger.info(f"📡 Markets loaded: {len(exchange.markets)} pairs")
+            
+            for timeframe, limit in timeframes.items():
+                candles: List[Candle] = []
+                
+                for symbol in symbols:
+                    ccxt_symbol = self._get_ccxt_symbol(symbol, "swap")
+                    
+                    try:
+                        if ccxt_symbol not in exchange.markets:
+                            logger.warning(f"⚠️ [{timeframe}] {ccxt_symbol} not found")
+                            continue
+                        
+                        raw = await exchange.fetch_ohlcv(
+                            ccxt_symbol,
+                            timeframe=timeframe,
+                            limit=limit,
+                        )
+                        
+                        for row in raw:
+                            ts, o, h, l, c, v = row
+                            candles.append(
+                                Candle(
+                                    ts=int(ts),
+                                    instrument=InstrumentRef(
+                                        symbol=symbol,
+                                        exchange_id=self._exchange_id,
+                                    ),
+                                    open=float(o),
+                                    high=float(h),
+                                    low=float(l),
+                                    close=float(c),
+                                    volume=float(v),
+                                    interval=timeframe,
+                                )
+                            )
+                        
+                        logger.debug(f"✅ [{timeframe}] {symbol}: {len(raw)} candles")
+                        
+                        # 添加小延迟避免限流
+                        await asyncio.sleep(0.1)
+                        
+                    except Exception as e:
+                        logger.warning(f"❌ [{timeframe}] {symbol}: {e}")
+                
+                result[timeframe] = candles
+                logger.info(f"📊 [{timeframe}] Total: {len(candles)} candles for {len(symbols)} symbols")
+                
+        except Exception as e:
+            logger.error(f"❌ Multi-timeframe fetch failed: {e}")
+        finally:
+            try:
+                await exchange.close()
+            except:
+                pass
+        
+        # 汇总日志
+        total_candles = sum(len(c) for c in result.values())
+        logger.info(f"📊 Multi-TF complete: {total_candles} candles across {list(timeframes.keys())}")
+        
+        return result
+
     async def get_market_snapshot(self, symbols: List[str]) -> MarketSnapShotType:
-        """获取市场快照（当前价格）"""
+        """获取市场快照（当前价格、资金费率等）"""
         snapshot: Dict[str, Dict[str, Any]] = defaultdict(dict)
         success_count = 0
         
@@ -174,6 +268,13 @@ class SimpleMarketDataSource(BaseMarketDataSource):
                     try:
                         fr = await exchange.fetch_funding_rate(ccxt_symbol)
                         snapshot[symbol]["funding_rate"] = fr
+                    except:
+                        pass
+                    
+                    # 尝试获取持仓量
+                    try:
+                        oi = await exchange.fetch_open_interest(ccxt_symbol)
+                        snapshot[symbol]["open_interest"] = oi
                     except:
                         pass
                         

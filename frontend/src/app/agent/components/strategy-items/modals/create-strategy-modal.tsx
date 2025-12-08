@@ -1,4 +1,5 @@
 import { useStore } from "@tanstack/react-form";
+import { AlertCircleIcon } from "lucide-react";
 import type { FC, RefObject } from "react";
 import { memo, useImperativeHandle, useState } from "react";
 import { useGetModelProviderDetail } from "@/api/setting";
@@ -7,10 +8,12 @@ import {
   useGetStrategyList,
   useGetStrategyPrompts,
 } from "@/api/strategy";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
@@ -22,7 +25,6 @@ import {
   ExchangeForm,
 } from "@/components/valuecell/form/exchange-form";
 import { TradingStrategyForm } from "@/components/valuecell/form/trading-strategy-form";
-import ScrollContainer from "@/components/valuecell/scroll/scroll-container";
 import { StepIndicator } from "@/components/valuecell/step-indicator";
 import { TRADING_SYMBOLS } from "@/constants/agent";
 import {
@@ -54,6 +56,7 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
 }) => {
   const [open, setOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
+  const [error, setError] = useState<string | null>(null);
 
   const { data: prompts = [] } = useGetStrategyPrompts();
   const { data: strategies = [] } = useGetStrategyList();
@@ -140,7 +143,12 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
         trading_config: value,
       };
 
-      await createStrategy(payload);
+      const { code, msg } = await createStrategy(payload);
+      if (code !== 0) {
+        setError(msg);
+        return;
+      }
+
       tracker.send("use", { agent_name: "StrategyAgent" });
       resetAll();
     },
@@ -151,6 +159,7 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
     form1.reset();
     form2.reset();
     form3.reset();
+    setError(null);
     setOpen(false);
   };
 
@@ -190,7 +199,7 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
         </DialogTitle>
 
         {/* Form content with scroll */}
-        <ScrollContainer className="px-1 py-2">
+        <div className="scroll-container px-1 py-2">
           {/* Step 1: AI Models */}
           {currentStep === 1 && <AIModelForm form={form1} />}
 
@@ -205,39 +214,48 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
               tradingMode={form2.state.values.trading_mode}
             />
           )}
-        </ScrollContainer>
-
-        {/* Footer buttons */}
-        <div className="mt-auto flex gap-6">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={currentStep === 1 ? resetAll : handleBack}
-            className="flex-1 border-gray-100 py-4 font-semibold text-base"
-          >
-            {currentStep === 1 ? "Cancel" : "Back"}
-          </Button>
-          <Button
-            type="button"
-            disabled={isCreatingStrategy}
-            onClick={async () => {
-              switch (currentStep) {
-                case 1:
-                  await form1.handleSubmit();
-                  break;
-                case 2:
-                  await form2.handleSubmit();
-                  break;
-                case 3:
-                  await form3.handleSubmit();
-              }
-            }}
-            className="flex-1 py-4 font-semibold text-base text-white hover:bg-gray-800"
-          >
-            {isCreatingStrategy && <Spinner />}{" "}
-            {currentStep === 3 ? "Confirm" : "Next"}
-          </Button>
         </div>
+
+        <DialogFooter className="mt-auto flex flex-col! gap-2">
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircleIcon />
+              <AlertTitle>Error Creating Strategy</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          <div className="grid w-full grid-cols-2 gap-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={currentStep === 1 ? resetAll : handleBack}
+              className="border-gray-100 py-4 font-semibold text-base"
+            >
+              {currentStep === 1 ? "Cancel" : "Back"}
+            </Button>
+            <Button
+              type="button"
+              disabled={isCreatingStrategy}
+              onClick={async () => {
+                switch (currentStep) {
+                  case 1:
+                    await form1.handleSubmit();
+                    break;
+                  case 2:
+                    await form2.handleSubmit();
+                    break;
+                  case 3:
+                    await form3.handleSubmit();
+                }
+              }}
+              className="relative py-4 font-semibold text-base text-white hover:bg-gray-800"
+            >
+              {isCreatingStrategy && <Spinner className="absolute left-4" />}
+              {currentStep === 3 ? "Confirm" : "Next"}
+            </Button>
+          </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

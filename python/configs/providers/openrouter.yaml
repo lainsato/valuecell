@@ -25,6 +25,7 @@ models:
   name: Gemini 3 Pro Preview
 - id: x-ai/grok-4.1-fast
   name: Grok 4.1 Fast(free)
+<<<<<<< HEAD
 - id: tngtech/deepseek-r1t2-chimera:free
   name: deepseek-r1t2
 - id: qwen/qwen3-coder:free
@@ -33,6 +34,10 @@ models:
   name: Gemini 2.0 Flash Experimental (free)
 - id: meta-llama/llama-3.3-70b-instruct:free
   name: 'Meta: Llama 3.3 70B Instruct (free)'
+=======
+- id: google/gemini-2.0-flash-exp:free
+  name: google/gemini-2.0-flash-exp:free
+>>>>>>> dfa1cdf39017c381122fd2f7b2430540df3ac49e
 embedding:
   default_model: qwen/qwen3-embedding-4b
   defaults:
