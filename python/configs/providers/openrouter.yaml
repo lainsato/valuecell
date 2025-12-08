@@ -37,7 +37,6 @@ models:
 =======
 - id: google/gemini-2.0-flash-exp:free
   name: google/gemini-2.0-flash-exp:free
->>>>>>> dfa1cdf39017c381122fd2f7b2430540df3ac49e
 embedding:
   default_model: qwen/qwen3-embedding-4b
   defaults:
