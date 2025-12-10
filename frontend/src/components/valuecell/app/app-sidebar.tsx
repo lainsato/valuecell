@@ -8,9 +8,9 @@ import {
 import { NavLink, useLocation } from "react-router";
 import { useGetAgentList } from "@/api/agent";
 import {
-  ChartBarVertical,
   Conversation,
   Logo,
+  Market,
   Ranking,
   Setting,
   StrategyAgent,
@@ -166,7 +166,7 @@ const AppSidebar: FC = () => {
         },
         {
           id: "market",
-          icon: ChartBarVertical,
+          icon: Market,
           label: "Market",
           to: "/market",
         },
@@ -222,7 +222,7 @@ const AppSidebar: FC = () => {
 
       <Separator className="w-10! bg-white" />
 
-      <SidebarContent className="scroll-container">
+      <SidebarContent>
         <SidebarMenu className="py-3">
           {agentItems?.map((item) => {
             return (
