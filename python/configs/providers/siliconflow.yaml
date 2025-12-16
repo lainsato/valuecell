@@ -4,7 +4,7 @@ enabled: true
 connection:
   base_url: https://api.siliconflow.cn/v1
   api_key_env: SILICONFLOW_API_KEY
-default_model: Qwen/Qwen3-235B-A22B-Thinking-2507
+default_model: Qwen/Qwen3-VL-30B-A3B-Thinking
 defaults:
   temperature: 0.7
   max_tokens: 4096
@@ -24,6 +24,8 @@ models:
 - id: inclusionAI/Ring-1T
   name: Ring 1T
   context_length: 128000
+- id: Qwen/Qwen3-VL-30B-A3B-Thinking
+  name: Qwen/Qwen3-VL-30B-A3B-Thinking
 embedding:
   default_model: Qwen/Qwen3-Embedding-4B
   defaults:
